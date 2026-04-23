@@ -1,24 +1,13 @@
 <!DOCTYPE html>
 
-<?php
-
-// Parametri di connessione al database
-$ip = 'localhost';
-$user = 'root';
-$pwd = '';
-$dbname = 'NetVision';
-
-// Connessione al database
-$con = new mysqli($ip, $user, $pwd, $dbname);
-
-?>
+<?php require 'includes/db.php'; ?>
 
 <html lang="it">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>NetVision - Login</title>
-    <link rel="stylesheet" href="css/login.css">
+    <link rel="stylesheet" href="assets/css/login.css">
 </head>
 <body>
     <?php

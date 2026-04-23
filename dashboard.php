@@ -8,14 +8,7 @@ if (!isset($_SESSION['logged_in'])) {
     exit();
 }
 
-// Parametri di connessione al database
-$ip = 'localhost';
-$user = 'root';
-$pwd = '';
-$dbname = 'NetVision';
-
-// Connessione al database
-$con = new mysqli($ip, $user, $pwd, $dbname);
+require 'includes/db.php';
 
 function getScopedIpv6Base(string $address): ?string
 {
@@ -137,7 +130,7 @@ $typeLabels = [
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>NetVision - Dashboard</title>
-    <link rel="stylesheet" href="css/dashboard.css">
+    <link rel="stylesheet" href="assets/css/dashboard.css">
     <!-- Font Awesome per le icone dei dispositivi -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
 </head>
@@ -430,7 +423,7 @@ function checkDevices() {
     btn.disabled = true;
     btn.innerHTML = '<i class="fas fa-sync-alt fa-spin"></i> Aggiornamento...';
 
-    fetch('check_devices.php')
+    fetch('api/check_devices.php')
         .then(r => r.json())
         .then(data => {
             // Per ogni dispositivo aggiorna badge, colore icona e orario sulla card

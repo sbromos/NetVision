@@ -2,14 +2,7 @@
 // La risposta viene restituita in formato JSON
 header('Content-Type: application/json');
 
-// Parametri di connessione al database
-$ip = 'localhost';
-$user = 'root';
-$pwd = '';
-$dbname = 'NetVision';
-
-// Connessione al database
-$con = new mysqli($ip, $user, $pwd, $dbname);
+require '../includes/db.php';
 
 function getScopedIpv6Base(string $address): ?string
 {
