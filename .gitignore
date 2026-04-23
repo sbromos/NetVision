@@ -1,0 +1,19 @@
+# Sistema
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Editor
+.vscode/
+.idea/
+*.suo
+*.user
+
+# Log e temporanei
+*.log
+*.tmp
+*.bak
+
+# Configurazione locale sensibile (se in futuro estratta dai PHP)
+.env
+config.local.php
