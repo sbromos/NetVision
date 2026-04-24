@@ -155,6 +155,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $stmt = $con->prepare("DELETE FROM devices WHERE id=?");
         $stmt->bind_param("i", $id);
         $stmt->execute();
+
+    // Elimina tutti i dispositivi
+    } elseif ($action === 'delete_all') {
+        $con->query("DELETE FROM devices");
     }
 
     // Dopo ogni azione reindirizza alla dashboard per evitare reinvii del form
@@ -198,6 +202,48 @@ if ($clientIp === '127.0.0.1' && !empty($primarySubnet['local_ip'])) {
     $clientIp = $primarySubnet['local_ip'];
 }
 
+// ── Rilevamento tipo dispositivo dal User-Agent ───────────────────────────────
+// Analizza lo User-Agent del browser per determinare se il client è mobile o desktop.
+// Aggiorna il DB solo se il dispositivo esiste e ha tipo 'unknown'.
+$userAgent = $_SERVER['HTTP_USER_AGENT'] ?? '';
+
+function guessTypeFromUserAgent(string $ua): string
+{
+    // Tablet prima di phone (iPad contiene anche "Mobile" in alcuni UA)
+    if (preg_match('/ipad|tablet|kindle|playbook|silk|(android(?!.*mobile))/i', $ua)) {
+        return 'phone'; // nessun tipo "tablet" nel sistema, lo mappiamo a phone
+    }
+    if (preg_match('/iphone|ipod|android.*mobile|windows phone|blackberry|mobile/i', $ua)) {
+        return 'phone';
+    }
+    if (preg_match('/macintosh|mac os x/i', $ua)) {
+        return 'laptop';
+    }
+    if (preg_match('/windows|linux|ubuntu|debian|fedora|x11/i', $ua)) {
+        return 'pc';
+    }
+    return 'unknown';
+}
+
+$detectedType = guessTypeFromUserAgent($userAgent);
+
+// Aggiorna nel DB solo se il tipo era 'unknown' e abbiamo rilevato qualcosa
+if ($detectedType !== 'unknown' && $clientIp !== '') {
+    $upd = $con->prepare(
+        "UPDATE devices SET type = ? WHERE ip = ? AND type = 'unknown'"
+    );
+    $upd->bind_param("ss", $detectedType, $clientIp);
+    $upd->execute();
+
+    // Aggiorna anche l'array in memoria per riflettere subito il nuovo tipo nella UI
+    foreach ($devices as &$device) {
+        if (trim($device['ip']) === $clientIp && $device['type'] === 'unknown') {
+            $device['type'] = $detectedType;
+        }
+    }
+    unset($device);
+}
+
 // Sposta il dispositivo con l'IP del client in cima alla lista
 $clientDeviceIndex = null;
 foreach ($devices as $i => $device) {
@@ -208,6 +254,12 @@ foreach ($devices as $i => $device) {
 }
 if ($clientDeviceIndex !== null) {
     $clientDevice = array_splice($devices, $clientDeviceIndex, 1);
+    // Il dispositivo del client è per definizione online (sta caricando la pagina):
+    // forza lo status a 'online' sia in memoria che nel DB
+    $clientDevice[0]['status'] = 'online';
+    $upd = $con->prepare("UPDATE devices SET status = 'online', last_check = NOW() WHERE ip = ?");
+    $upd->bind_param("s", $clientIp);
+    $upd->execute();
     array_unshift($devices, $clientDevice[0]);
 }
 $onlineDevices = 0;
@@ -273,6 +325,19 @@ $typeLabels = [
         <span class="topbar-logo">NetVision</span>
     </div>
     <div class="topbar-right">
+        <!-- Menu utility -->
+        <div class="utility-menu" id="utilityMenu">
+            <button class="btn-utility" onclick="toggleUtilityMenu(event)" title="Utility">
+                <i class="fas fa-wrench"></i>
+            </button>
+            <div class="utility-dropdown" id="utilityDropdown">
+                <div class="utility-dropdown-header">Utility</div>
+                <button class="utility-item utility-item-danger" onclick="deleteAllDevices()">
+                    <i class="fas fa-trash-alt"></i> Elimina tutti i dispositivi
+                </button>
+            </div>
+        </div>
+
         <span class="topbar-user"><i class="fas fa-user"></i> <?php echo htmlspecialchars($_SESSION['username']); ?></span>
         <a href="login.php" class="btn-logout"><i class="fas fa-sign-out-alt"></i> Esci</a>
     </div>
@@ -510,6 +575,11 @@ $typeLabels = [
     <input type="hidden" name="id" id="deleteId">
 </form>
 
+<!-- Form nascosto per eliminare tutti i dispositivi -->
+<form id="deleteAllForm" method="POST" action="dashboard.php">
+    <input type="hidden" name="action" value="delete_all">
+</form>
+
 <script>
 function getScopedIpv6Base(value) {
     const parts = value.split('%');
@@ -681,6 +751,25 @@ function checkDevices() {
 
 // Aggiorna automaticamente lo stato dei dispositivi ogni 60 secondi
 setInterval(checkDevices, 60000);
+
+// Apre/chiude il menu utility
+function toggleUtilityMenu(event) {
+    event.stopPropagation();
+    document.getElementById('utilityDropdown').classList.toggle('active');
+}
+
+// Chiude il menu utility cliccando fuori
+document.addEventListener('click', function() {
+    document.getElementById('utilityDropdown').classList.remove('active');
+});
+
+// Elimina tutti i dispositivi dopo conferma
+function deleteAllDevices() {
+    document.getElementById('utilityDropdown').classList.remove('active');
+    if (confirm('Eliminare TUTTI i dispositivi? L\'operazione non è reversibile.')) {
+        document.getElementById('deleteAllForm').submit();
+    }
+}
 
 // Mostra un messaggio nel toast e lo nasconde dopo `duration` ms
 function showToast(message, type, duration) {

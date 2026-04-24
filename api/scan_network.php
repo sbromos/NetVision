@@ -7,7 +7,6 @@ require '../includes/nmap_helper.php';
 
 /**
  * Rileva la subnet IPv4 locale tramite ipconfig (Windows) o ip (Linux/Mac).
- * Usata per determinare il range da passare a nmap per la scansione.
  */
 function detectLocalSubnet(): string
 {
@@ -16,7 +15,6 @@ function detectLocalSubnet(): string
     if (PHP_OS_FAMILY === 'Windows') {
         exec('ipconfig', $output);
         foreach ($output as $line) {
-            // Compatibile con Windows in italiano e inglese
             if (preg_match('/IPv4[^:]*:\s*([\d.]+)/i', $line, $m)) {
                 $ip = trim($m[1]);
                 if (
@@ -44,10 +42,61 @@ function detectLocalSubnet(): string
     return '192.168.1.0/24';
 }
 
+/**
+ * Tenta di indovinare il tipo di dispositivo a partire dal nome del produttore
+ * della scheda di rete (OUI), estratto dall'output di nmap.
+ * Restituisce 'unknown' se non riesce a classificarlo.
+ */
+function guessDeviceType(string $manufacturer): string
+{
+    $m = strtolower($manufacturer);
+
+    // Router e access point
+    if (preg_match('/cisco|juniper|mikrotik|ubiquiti|unifi|zyxel|draytek|fortinet|paloalto|edgewater/', $m)) {
+        return 'router';
+    }
+
+    // Switch (spesso gli stessi vendor dei router, ma anche altri)
+    if (preg_match('/netgear|d-link|dlink|tp-link|tplink|linksys|trendnet|buffalo|asus|huawei/', $m)) {
+        return 'router';
+    }
+
+    // Stampanti
+    if (preg_match('/hewlett|hp inc|canon|epson|brother|lexmark|xerox|ricoh|kyocera|sharp|konica|oki/', $m)) {
+        return 'printer';
+    }
+
+    // Telecamere / NVR
+    if (preg_match('/hikvision|dahua|axis|bosch|hanwha|vivotek|uniview|reolink|amcrest|foscam/', $m)) {
+        return 'camera';
+    }
+
+    // Telefoni e dispositivi mobili
+    if (preg_match('/samsung|xiaomi|oneplus|oppo|vivo|huawei|motorola|lg electron|sony mobile|nokia|zte/', $m)) {
+        return 'phone';
+    }
+
+    // Apple: può essere phone, laptop o pc — usiamo 'laptop' come default ragionevole
+    if (preg_match('/apple/', $m)) {
+        return 'laptop';
+    }
+
+    // Server e NAS
+    if (preg_match('/supermicro|dell|intel corp|synology|qnap|western digital|seagate|ibm/', $m)) {
+        return 'server';
+    }
+
+    // PC generici (schede madri e adattatori comuni)
+    if (preg_match('/realtek|intel|asustek|gigabyte|msi|asrock|acer|lenovo/', $m)) {
+        return 'pc';
+    }
+
+    return 'unknown';
+}
+
 $nmap   = findNmapExecutable();
 $subnet = detectLocalSubnet();
 
-// Verifica che l'eseguibile esista prima di lanciarlo
 if ($nmap !== 'nmap' && !file_exists($nmap)) {
     echo json_encode([
         'error'   => true,
@@ -56,8 +105,7 @@ if ($nmap !== 'nmap' && !file_exists($nmap)) {
     exit();
 }
 
-// Esegue nmap: -sn = ping scan senza port scan, -R = risoluzione DNS per hostname
-// escapeshellarg() e il path calcolato server-side proteggono da injection
+// -sn = ping scan, -R = risoluzione DNS
 $nmapOutput = [];
 $returnCode = 0;
 exec(escapeshellarg($nmap) . ' -sn -R ' . escapeshellarg($subnet), $nmapOutput, $returnCode);
@@ -70,20 +118,29 @@ if ($returnCode !== 0 && empty($nmapOutput)) {
     exit();
 }
 
+// ── Parsing output nmap ──────────────────────────────────────────────────────
+// Raccoglie: ip, hostname, produttore MAC per ogni host trovato
 $foundIps       = [];
-$foundHostnames = []; // mappa ip => hostname (se disponibile tramite DNS)
+$foundHostnames = [];   // ip => hostname
+$foundVendors   = [];   // ip => produttore scheda di rete
+
+$currentIp = null;
 
 foreach ($nmapOutput as $line) {
-    // Formato con hostname: "Nmap scan report for router.lan (192.168.1.1)"
+    // Riga "Nmap scan report for hostname (192.168.1.1)"
     if (preg_match('/Nmap scan report for (.+?) \((\d+\.\d+\.\d+\.\d+)\)/', $line, $m)) {
-        $ip       = $m[2];
-        $hostname = trim($m[1]);
-        $foundIps[]          = $ip;
-        $foundHostnames[$ip] = $hostname;
+        $currentIp = $m[2];
+        $foundIps[]               = $currentIp;
+        $foundHostnames[$currentIp] = trim($m[1]);
 
-    // Formato senza hostname: "Nmap scan report for 192.168.1.25"
+    // Riga "Nmap scan report for 192.168.1.25" (senza hostname)
     } elseif (preg_match('/Nmap scan report for (\d+\.\d+\.\d+\.\d+)\s*$/', $line, $m)) {
-        $foundIps[] = $m[1];
+        $currentIp = $m[1];
+        $foundIps[] = $currentIp;
+
+    // Riga "MAC Address: AA:BB:CC:DD:EE:FF (Vendor Name)"
+    } elseif ($currentIp !== null && preg_match('/MAC Address:\s*[\dA-Fa-f:]+\s*\(([^)]+)\)/', $line, $m)) {
+        $foundVendors[$currentIp] = trim($m[1]);
     }
 }
 
@@ -99,23 +156,37 @@ $result = [];
 
 // ── Aggiorna o inserisce ogni IP trovato ─────────────────────────────────────
 foreach ($foundIps as $ip) {
-    $name = $foundHostnames[$ip] ?? 'Dispositivo sconosciuto';
+    $name         = $foundHostnames[$ip] ?? 'Dispositivo sconosciuto';
+    $manufacturer = $foundVendors[$ip]   ?? '';
+    $guessedType  = guessDeviceType($manufacturer);
 
-    $check = $con->prepare("SELECT id FROM devices WHERE ip = ?");
+    $check = $con->prepare("SELECT id, type FROM devices WHERE ip = ?");
     $check->bind_param("s", $ip);
     $check->execute();
-    $check->store_result();
+    $checkResult = $check->get_result();
 
-    if ($check->num_rows > 0) {
-        $upd = $con->prepare("UPDATE devices SET status = 'online', last_check = NOW() WHERE ip = ?");
-        $upd->bind_param("s", $ip);
+    if ($checkResult->num_rows > 0) {
+        $existing = $checkResult->fetch_assoc();
+
+        // Aggiorna status e timestamp; se il tipo era 'unknown' lo migliora col tipo dedotto
+        if ($existing['type'] === 'unknown' && $guessedType !== 'unknown') {
+            $upd = $con->prepare(
+                "UPDATE devices SET status = 'online', last_check = NOW(), type = ? WHERE ip = ?"
+            );
+            $upd->bind_param("ss", $guessedType, $ip);
+        } else {
+            $upd = $con->prepare("UPDATE devices SET status = 'online', last_check = NOW() WHERE ip = ?");
+            $upd->bind_param("s", $ip);
+        }
         $upd->execute();
+
     } else {
+        // Nuovo dispositivo: inserisce con tipo dedotto dal produttore
         $ins = $con->prepare(
             "INSERT INTO devices (name, ip, type, status, last_check)
-             VALUES (?, ?, 'unknown', 'online', NOW())"
+             VALUES (?, ?, ?, 'online', NOW())"
         );
-        $ins->bind_param("ss", $name, $ip);
+        $ins->bind_param("sss", $name, $ip, $guessedType);
         $ins->execute();
     }
 
