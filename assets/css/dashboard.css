@@ -237,6 +237,59 @@ body {
     cursor: not-allowed;
 }
 
+.btn-scan {
+    background: #fff;
+    color: #1565c0;
+    border: 2px solid #1565c0;
+    padding: 10px 20px;
+    border-radius: 8px;
+    font-size: 0.9rem;
+    font-weight: bold;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.btn-scan:hover {
+    background: #1565c0;
+    color: #fff;
+}
+
+.btn-scan:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+}
+
+/* ── Scan toast ───────────────────────────── */
+.scan-toast {
+    position: fixed;
+    bottom: 28px;
+    left: 50%;
+    transform: translateX(-50%) translateY(20px);
+    background: #1f2937;
+    color: #fff;
+    padding: 13px 26px;
+    border-radius: 10px;
+    font-size: 0.9rem;
+    font-weight: 500;
+    box-shadow: 0 8px 28px rgba(0,0,0,0.22);
+    z-index: 9999;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.3s, transform 0.3s;
+    white-space: nowrap;
+}
+
+.scan-toast-visible {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0);
+    pointer-events: auto;
+}
+
+.scan-toast-success { background: #2e7d32; }
+.scan-toast-error   { background: #c62828; }
+.scan-toast-warning { background: #e65100; }
+.scan-toast-info    { background: #1565c0; }
+
 /* ── Grid ─────────────────────────────────── */
 .devices-grid {
     display: grid;
@@ -382,6 +435,25 @@ body {
 
 .btn-edit:hover   { background: #2e7d32; color: #fff; }
 .btn-delete:hover { background: #c62828; color: #fff; }
+
+/* ── Card "questo dispositivo" ────────────── */
+.device-card-self {
+    border: 2px solid #2e7d32;
+    box-shadow: 0 4px 20px rgba(46,125,50,0.18);
+}
+
+.badge-self {
+    display: inline-block;
+    background: #2e7d32;
+    color: #fff;
+    font-size: 0.65rem;
+    font-weight: bold;
+    padding: 2px 7px;
+    border-radius: 20px;
+    vertical-align: middle;
+    margin-left: 6px;
+    letter-spacing: 0.04em;
+}
 
 /* ── Empty state ──────────────────────────── */
 .empty-state {

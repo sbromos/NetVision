@@ -9,6 +9,7 @@ if (!isset($_SESSION['logged_in'])) {
 }
 
 require 'includes/db.php';
+require 'includes/nmap_helper.php';
 
 function getScopedIpv6Base(string $address): ?string
 {
@@ -164,7 +165,51 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 // Recupera tutti i dispositivi dal database ordinati per nome
 $result  = $con->query("SELECT * FROM devices ORDER BY name ASC");
 $devices = $result ? $result->fetch_all(MYSQLI_ASSOC) : [];
-$primarySubnet = getPrimaryIpv4Subnet($devices);
+
+// Prova a ottenere le informazioni di rete reali tramite nmap --iflist.
+// Se nmap non è disponibile ricade sul calcolo derivato dai dispositivi nel DB.
+$nmap          = findNmapExecutable();
+$primarySubnet = getRealNetworkInfo($nmap);
+
+if ($primarySubnet !== null) {
+    // Conta i dispositivi del DB che ricadono nella subnet rilevata da nmap
+    $primarySubnet['assigned_hosts'] = countDevicesInSubnet(
+        $devices,
+        $primarySubnet['_network_long'],
+        $primarySubnet['_mask_int']
+    );
+} else {
+    // Fallback: deriva i dati dagli IP già inseriti manualmente nel DB
+    $primarySubnet = getPrimaryIpv4Subnet($devices);
+}
+
+// Rileva l'IP del client connesso (supporta anche proxy con X-Forwarded-For)
+$clientIp = trim($_SERVER['HTTP_X_FORWARDED_FOR'] ?? $_SERVER['REMOTE_ADDR'] ?? '');
+// Se X-Forwarded-For contiene una lista, prende il primo IP
+if (strpos($clientIp, ',') !== false) {
+    $clientIp = trim(explode(',', $clientIp)[0]);
+}
+// Normalizza ::1 (loopback IPv6) a 127.0.0.1
+if ($clientIp === '::1') {
+    $clientIp = '127.0.0.1';
+}
+// Se il client si collega da localhost, usa l'IP reale del server rilevato da nmap
+if ($clientIp === '127.0.0.1' && !empty($primarySubnet['local_ip'])) {
+    $clientIp = $primarySubnet['local_ip'];
+}
+
+// Sposta il dispositivo con l'IP del client in cima alla lista
+$clientDeviceIndex = null;
+foreach ($devices as $i => $device) {
+    if (trim($device['ip']) === $clientIp) {
+        $clientDeviceIndex = $i;
+        break;
+    }
+}
+if ($clientDeviceIndex !== null) {
+    $clientDevice = array_splice($devices, $clientDeviceIndex, 1);
+    array_unshift($devices, $clientDevice[0]);
+}
 $onlineDevices = 0;
 $offlineDevices = 0;
 $unknownDevices = 0;
@@ -253,8 +298,8 @@ $typeLabels = [
                         <strong>
                             <?php
                             echo $primarySubnet
-                                ? $primarySubnet['assigned_hosts'] . '/' . $primarySubnet['usable_hosts']
-                                : '0/0';
+                                ? $ipv4Count . '/' . $primarySubnet['usable_hosts']
+                                : $ipv4Count . '/0';
                             ?>
                         </strong>
                     </div>
@@ -273,6 +318,12 @@ $typeLabels = [
                         <span>Pool IP principale</span>
                         <strong><?php echo htmlspecialchars($primarySubnet['network'] ?? 'Non disponibile'); ?></strong>
                     </div>
+                    <?php if (!empty($primarySubnet['local_ip'])): ?>
+                    <div class="network-detail-row">
+                        <span>IP del server</span>
+                        <strong><?php echo htmlspecialchars($primarySubnet['local_ip']); ?></strong>
+                    </div>
+                    <?php endif; ?>
                     <div class="network-detail-row">
                         <span>Maschera</span>
                         <strong>
@@ -304,9 +355,11 @@ $typeLabels = [
                 <div class="network-note">
                     <?php if ($primarySubnet): ?>
                     <p>
-                        Subnet principale rilevata da <?php echo $primarySubnet['assigned_hosts']; ?>
-                        dispositiv<?php echo $primarySubnet['assigned_hosts'] === 1 ? 'o' : 'i'; ?>
-                        IPv4 su <?php echo $primarySubnet['usable_hosts']; ?> host disponibili.
+                        <?php if (!empty($primarySubnet['local_ip'])): ?>
+                            Dati rilevati in tempo reale tramite Nmap.
+                        <?php else: ?>
+                            Subnet derivata dai dispositivi registrati nel DB.
+                        <?php endif; ?>
                     </p>
                     <?php else: ?>
                     <p>Aggiungi almeno un dispositivo con IPv4 per visualizzare pool, maschera e range host della rete.</p>
@@ -321,6 +374,9 @@ $typeLabels = [
                 <div class="header-actions">
                     <button class="btn-refresh" onclick="checkDevices()" id="btnRefresh">
                         <i class="fas fa-sync-alt"></i> Aggiorna Stato
+                    </button>
+                    <button class="btn-scan" onclick="scanNetwork()" id="btnScan">
+                        <i class="fas fa-radar"></i> Scansiona rete
                     </button>
                     <button class="btn-add" onclick="openModal()">
                         <i class="fas fa-plus"></i> Aggiungi Dispositivo
@@ -340,6 +396,10 @@ $typeLabels = [
                     $icon      = $typeIcons[$device['type']]  ?? 'fa-question-circle';
                     $typeLabel = $typeLabels[$device['type']] ?? $device['type'];
                     $status    = $device['status'];
+                    $isClient  = (trim($device['ip']) === $clientIp);
+
+                    // Solo per la card del client, mostra un nome alternativo visivo
+                    $displayName = $isClient ? 'Questo dispositivo' : $device['name'];
 
                     if ($status === 'online') {
                         $statusClass = 'status-online';
@@ -360,12 +420,17 @@ $typeLabels = [
 
                     $deviceJson = htmlspecialchars(json_encode($device), ENT_QUOTES);
                 ?>
-                <div class="device-card" id="card-<?php echo $device['id']; ?>">
+                <div class="device-card<?php echo $isClient ? ' device-card-self' : ''; ?>" id="card-<?php echo $device['id']; ?>">
                     <div class="card-icon <?php echo $statusClass; ?>-icon">
                         <i class="fas <?php echo $icon; ?>"></i>
                     </div>
                     <div class="card-body">
-                        <h3 class="device-name"><?php echo htmlspecialchars($device['name']); ?></h3>
+                        <h3 class="device-name">
+                            <?php echo htmlspecialchars($displayName); ?>
+                            <?php if ($isClient): ?>
+                                <span class="badge-self">Tu</span>
+                            <?php endif; ?>
+                        </h3>
                         <p class="device-type"><?php echo $typeLabel; ?></p>
                         <p class="device-ip"><i class="fas fa-globe"></i> <?php echo htmlspecialchars($device['ip']); ?></p>
                         <div class="status-badge <?php echo $statusClass; ?>">
@@ -374,6 +439,7 @@ $typeLabels = [
                         </div>
                         <p class="last-check"><i class="fas fa-clock"></i> <?php echo $lastCheck; ?></p>
                     </div>
+                    <?php if (!$isClient): ?>
                     <div class="card-actions">
                         <button class="btn-edit" onclick='openEditModal(<?php echo $deviceJson; ?>)'>
                             <i class="fas fa-pen"></i> Modifica
@@ -382,6 +448,7 @@ $typeLabels = [
                             <i class="fas fa-trash"></i> Elimina
                         </button>
                     </div>
+                    <?php endif; ?>
                 </div>
                 <?php endforeach; ?>
             </div>
@@ -433,6 +500,9 @@ $typeLabels = [
         </form>
     </div>
 </div>
+
+<!-- Toast di notifica per la scansione rete -->
+<div id="scanToast" class="scan-toast" aria-live="polite"></div>
 
 <!-- Form nascosto usato per inviare la richiesta di eliminazione -->
 <form id="deleteForm" method="POST" action="dashboard.php">
@@ -611,6 +681,72 @@ function checkDevices() {
 
 // Aggiorna automaticamente lo stato dei dispositivi ogni 60 secondi
 setInterval(checkDevices, 60000);
+
+// Mostra un messaggio nel toast e lo nasconde dopo `duration` ms
+function showToast(message, type, duration) {
+    var toast = document.getElementById('scanToast');
+    toast.textContent = message;
+    toast.className   = 'scan-toast scan-toast-' + type + ' scan-toast-visible';
+
+    clearTimeout(toast._hideTimer);
+    toast._hideTimer = setTimeout(function() {
+        toast.className = 'scan-toast';
+    }, duration || 4000);
+}
+
+// Esegue la scansione rete tramite Nmap (solo manuale, mai automatica)
+function scanNetwork() {
+    var btn  = document.getElementById('btnScan');
+    var btnR = document.getElementById('btnRefresh');
+
+    // Disabilita entrambi i bottoni durante la scansione
+    btn.disabled  = true;
+    btnR.disabled = true;
+    btn.innerHTML = '<i class="fas fa-circle-notch fa-spin"></i> Scansione in corso...';
+
+    showToast('Scansione rete avviata. Attendere...', 'info', 60000);
+
+    fetch('api/scan_network.php')
+        .then(function(response) {
+            if (!response.ok) {
+                throw new Error('Errore HTTP ' + response.status);
+            }
+            return response.json();
+        })
+        .then(function(data) {
+            // Errore restituito dall'API (es. nmap non trovato)
+            if (data.error) {
+                showToast('Errore: ' + data.message, 'error', 6000);
+                return;
+            }
+
+            var count = Array.isArray(data) ? data.length : 0;
+
+            if (count === 0) {
+                showToast('Scansione completata: nessun dispositivo rilevato.', 'warning', 5000);
+                return;
+            }
+
+            showToast(
+                'Scansione completata: ' + count + ' dispositiv' + (count === 1 ? 'o' : 'i') + ' rilevat' + (count === 1 ? 'o' : 'i') + '. Aggiornamento in corso...',
+                'success',
+                3500
+            );
+
+            // Ricarica la pagina dopo un breve ritardo per mostrare i nuovi dispositivi
+            setTimeout(function() {
+                location.reload();
+            }, 1800);
+        })
+        .catch(function(err) {
+            showToast('Errore durante la scansione: ' + err.message, 'error', 6000);
+        })
+        .finally(function() {
+            btn.disabled  = false;
+            btnR.disabled = false;
+            btn.innerHTML = '<i class="fas fa-radar"></i> Scansiona rete';
+        });
+}
 
 document.getElementById('deviceIp').addEventListener('input', updateIpValidation);
 
