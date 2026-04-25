@@ -115,8 +115,14 @@ $con->query("CREATE TABLE IF NOT EXISTS devices (
     ip VARCHAR(45) NOT NULL,
     type VARCHAR(50) NOT NULL DEFAULT 'pc',
     status ENUM('online','offline','unknown') NOT NULL DEFAULT 'unknown',
-    last_check DATETIME DEFAULT NULL
+    last_check DATETIME DEFAULT NULL,
+    ping_ms INT DEFAULT NULL,
+    notes TEXT DEFAULT NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
+
+// Aggiunge le colonne ping_ms e notes se la tabella esisteva già senza di esse
+$con->query("ALTER TABLE devices ADD COLUMN IF NOT EXISTS ping_ms INT DEFAULT NULL");
+$con->query("ALTER TABLE devices ADD COLUMN IF NOT EXISTS notes TEXT DEFAULT NULL");
 
 // Gestisce le azioni inviate tramite POST (aggiungi, modifica, elimina)
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
@@ -127,9 +133,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $name   = trim($_POST['name']);
         $ip_dev = trim($_POST['ip']);
         $type   = $_POST['type'];
+        $notes  = trim($_POST['notes'] ?? '');
         if (isValidIpAddress($ip_dev)) {
-            $stmt = $con->prepare("INSERT INTO devices (name, ip, type) VALUES (?, ?, ?)");
-            $stmt->bind_param("sss", $name, $ip_dev, $type);
+            $stmt = $con->prepare("INSERT INTO devices (name, ip, type, notes) VALUES (?, ?, ?, ?)");
+            $stmt->bind_param("ssss", $name, $ip_dev, $type, $notes);
             $stmt->execute();
         } else {
             $_SESSION['device_error'] = 'Inserisci un indirizzo IP valido IPv4 o IPv6.';
@@ -141,9 +148,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $name   = trim($_POST['name']);
         $ip_dev = trim($_POST['ip']);
         $type   = $_POST['type'];
+        $notes  = trim($_POST['notes'] ?? '');
         if (isValidIpAddress($ip_dev)) {
-            $stmt = $con->prepare("UPDATE devices SET name=?, ip=?, type=? WHERE id=?");
-            $stmt->bind_param("sssi", $name, $ip_dev, $type, $id);
+            $stmt = $con->prepare("UPDATE devices SET name=?, ip=?, type=?, notes=? WHERE id=?");
+            $stmt->bind_param("ssssi", $name, $ip_dev, $type, $notes, $id);
             $stmt->execute();
         } else {
             $_SESSION['device_error'] = 'Inserisci un indirizzo IP valido IPv4 o IPv6.';
@@ -313,6 +321,9 @@ $typeLabels = [
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>NetVision - Dashboard</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="assets/css/dashboard.css">
     <!-- Font Awesome per le icone dei dispositivi -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
@@ -332,6 +343,9 @@ $typeLabels = [
             </button>
             <div class="utility-dropdown" id="utilityDropdown">
                 <div class="utility-dropdown-header">Utility</div>
+                <button class="utility-item" onclick="exportCsv()">
+                    <i class="fas fa-file-csv"></i> Esporta dispositivi (CSV)
+                </button>
                 <button class="utility-item utility-item-danger" onclick="deleteAllDevices()">
                     <i class="fas fa-trash-alt"></i> Elimina tutti i dispositivi
                 </button>
@@ -456,7 +470,37 @@ $typeLabels = [
                 <button class="btn-add" onclick="openModal()">Aggiungi il primo dispositivo</button>
             </div>
             <?php else: ?>
-            <div class="devices-grid">
+
+            <!-- Barra filtri e ricerca -->
+            <div class="filter-bar">
+                <div class="search-wrapper">
+                    <i class="fas fa-search"></i>
+                    <input type="text" id="searchInput" placeholder="Cerca per nome o IP..." oninput="filterDevices()">
+                </div>
+                <select id="filterStatus" onchange="filterDevices()">
+                    <option value="">Tutti gli stati</option>
+                    <option value="online">Online</option>
+                    <option value="offline">Offline</option>
+                    <option value="unknown">Non verificato</option>
+                </select>
+                <select id="filterType" onchange="filterDevices()">
+                    <option value="">Tutti i tipi</option>
+                    <option value="pc">PC</option>
+                    <option value="laptop">Laptop</option>
+                    <option value="server">Server</option>
+                    <option value="router">Router</option>
+                    <option value="switch">Switch</option>
+                    <option value="printer">Stampante</option>
+                    <option value="phone">Telefono</option>
+                    <option value="camera">Telecamera</option>
+                </select>
+                <span class="filter-count" id="filterCount"></span>
+            </div>
+            <div class="no-results" id="noResults" style="display:none;">
+                <i class="fas fa-search"></i> Nessun dispositivo corrisponde ai filtri impostati.
+            </div>
+
+            <div class="devices-grid" id="devicesGrid">
                 <?php foreach ($devices as $device):
                     $icon      = $typeIcons[$device['type']]  ?? 'fa-question-circle';
                     $typeLabel = $typeLabels[$device['type']] ?? $device['type'];
@@ -485,7 +529,19 @@ $typeLabels = [
 
                     $deviceJson = htmlspecialchars(json_encode($device), ENT_QUOTES);
                 ?>
-                <div class="device-card<?php echo $isClient ? ' device-card-self' : ''; ?>" id="card-<?php echo $device['id']; ?>">
+                <div class="device-card<?php echo $isClient ? ' device-card-self' : ''; ?>"
+                     id="card-<?php echo $device['id']; ?>"
+                     data-name="<?php echo htmlspecialchars(strtolower($device['name']), ENT_QUOTES); ?>"
+                     data-ip="<?php echo htmlspecialchars($device['ip'], ENT_QUOTES); ?>"
+                     data-status="<?php echo $device['status']; ?>"
+                     data-type="<?php echo htmlspecialchars($device['type'], ENT_QUOTES); ?>">
+
+                    <!-- Pulsante informazioni dispositivo -->
+                    <button class="btn-card-info" title="Informazioni dispositivo"
+                            onclick="openInfoModal(<?php echo $device['id']; ?>, '<?php echo htmlspecialchars($displayName, ENT_QUOTES); ?>')">
+                        <i class="fas fa-info-circle"></i>
+                    </button>
+
                     <div class="card-icon <?php echo $statusClass; ?>-icon">
                         <i class="fas <?php echo $icon; ?>"></i>
                     </div>
@@ -497,12 +553,20 @@ $typeLabels = [
                             <?php endif; ?>
                         </h3>
                         <p class="device-type"><?php echo $typeLabel; ?></p>
-                        <p class="device-ip"><i class="fas fa-globe"></i> <?php echo htmlspecialchars($device['ip']); ?></p>
-                        <div class="status-badge <?php echo $statusClass; ?>">
+                        <p class="device-ip"><i class="fas fa-globe"></i><span><?php echo htmlspecialchars($device['ip']); ?></span></p>
+                        <div class="status-badge <?php echo $statusClass; ?>" id="badge-<?php echo $device['id']; ?>">
                             <span class="status-dot"></span>
                             <?php echo $statusLabel; ?>
                         </div>
-                        <p class="last-check"><i class="fas fa-clock"></i> <?php echo $lastCheck; ?></p>
+                        <p class="last-check" id="lastcheck-<?php echo $device['id']; ?>"><i class="fas fa-clock"></i> <?php echo $lastCheck; ?></p>
+                        <p class="device-ping" id="ping-<?php echo $device['id']; ?>">
+                            <?php if ($device['ping_ms'] !== null): ?>
+                                <i class="fas fa-signal"></i> <?php echo (int)$device['ping_ms']; ?> ms
+                            <?php endif; ?>
+                        </p>
+                        <?php if (!empty($device['notes'])): ?>
+                        <p class="device-notes"><i class="fas fa-sticky-note"></i> <?php echo htmlspecialchars($device['notes']); ?></p>
+                        <?php endif; ?>
                     </div>
                     <?php if (!$isClient): ?>
                     <div class="card-actions">
@@ -558,6 +622,10 @@ $typeLabels = [
                     <option value="camera">Telecamera</option>
                 </select>
             </div>
+            <div class="form-group">
+                <label>Note (opzionale)</label>
+                <textarea name="notes" id="deviceNotes" placeholder="es. Piano 2, stanza server..." rows="2" maxlength="500"></textarea>
+            </div>
             <div class="modal-footer">
                 <button type="button" class="btn-cancel" onclick="closeModal()">Annulla</button>
                 <button type="submit" class="btn-save">Salva</button>
@@ -568,6 +636,22 @@ $typeLabels = [
 
 <!-- Toast di notifica per la scansione rete -->
 <div id="scanToast" class="scan-toast" aria-live="polite"></div>
+
+<!-- Modal informazioni dispositivo (tasto "i") -->
+<div class="modal-overlay" id="infoModalOverlay" onclick="closeInfoModal(event)">
+    <div class="modal modal-info">
+        <div class="modal-header">
+            <h2 id="infoModalTitle">Informazioni Dispositivo</h2>
+            <button class="modal-close" onclick="closeInfoModal()"><i class="fas fa-times"></i></button>
+        </div>
+        <div id="infoModalBody" class="info-modal-body">
+            <div class="info-loading">
+                <i class="fas fa-circle-notch fa-spin"></i>
+                <span>Scansione porte in corso&hellip;</span>
+            </div>
+        </div>
+    </div>
+</div>
 
 <!-- Form nascosto usato per inviare la richiesta di eliminazione -->
 <form id="deleteForm" method="POST" action="dashboard.php">
@@ -681,6 +765,7 @@ function openModal() {
     document.getElementById('deviceName').value = '';
     document.getElementById('deviceIp').value   = '';
     document.getElementById('deviceType').value = 'pc';
+    document.getElementById('deviceNotes').value = '';
     document.getElementById('modalOverlay').classList.add('active');
     updateIpValidation();
 }
@@ -693,6 +778,7 @@ function openEditModal(device) {
     document.getElementById('deviceName').value = device.name;
     document.getElementById('deviceIp').value   = device.ip;
     document.getElementById('deviceType').value = device.type;
+    document.getElementById('deviceNotes').value = device.notes || '';
     document.getElementById('modalOverlay').classList.add('active');
     updateIpValidation();
 }
@@ -716,37 +802,193 @@ function deleteDevice(id, name) {
 function checkDevices() {
     const btn = document.getElementById('btnRefresh');
 
-    // Disabilita il pulsante e mostra l'icona di caricamento
     btn.disabled = true;
     btn.innerHTML = '<i class="fas fa-sync-alt fa-spin"></i> Aggiornamento...';
 
     fetch('api/check_devices.php')
         .then(r => r.json())
         .then(data => {
-            // Per ogni dispositivo aggiorna badge, colore icona e orario sulla card
             data.forEach(d => {
                 const card = document.getElementById('card-' + d.id);
                 if (!card) return;
 
-                const badge     = card.querySelector('.status-badge');
+                const badge     = document.getElementById('badge-' + d.id);
                 const iconDiv   = card.querySelector('.card-icon');
-                const lastCheck = card.querySelector('.last-check');
+                const lastCheck = document.getElementById('lastcheck-' + d.id);
+                const pingEl    = document.getElementById('ping-' + d.id);
 
                 const labelMap = { online: 'Online', offline: 'Offline' };
                 const label    = labelMap[d.status] || 'Non verificato';
                 const cls      = 'status-' + d.status;
 
-                badge.className     = 'status-badge ' + cls;
-                badge.innerHTML     = '<span class="status-dot"></span> ' + label;
-                iconDiv.className   = 'card-icon ' + cls + '-icon';
-                lastCheck.innerHTML = '<i class="fas fa-clock"></i> ' + d.last_check;
+                if (badge)     { badge.className = 'status-badge ' + cls; badge.innerHTML = '<span class="status-dot"></span> ' + label; }
+                if (iconDiv)   { iconDiv.className = 'card-icon ' + cls + '-icon'; }
+                if (lastCheck) { lastCheck.innerHTML = '<i class="fas fa-clock"></i> ' + d.last_check; }
+                if (pingEl) {
+                    pingEl.innerHTML = (d.ping_ms !== null && d.ping_ms !== undefined)
+                        ? '<i class="fas fa-signal"></i> ' + d.ping_ms + ' ms'
+                        : '';
+                }
+
+                // Aggiorna data-status per i filtri
+                card.setAttribute('data-status', d.status);
             });
+
+            // Riapplica i filtri dopo l'aggiornamento
+            filterDevices();
         })
         .finally(() => {
-            // Riabilita il pulsante al termine
             btn.disabled = false;
             btn.innerHTML = '<i class="fas fa-sync-alt"></i> Aggiorna Stato';
         });
+}
+
+// ── Filtri e ricerca ───────────────────────────────────────────────────────
+function filterDevices() {
+    var search  = (document.getElementById('searchInput')  ? document.getElementById('searchInput').value.trim().toLowerCase()  : '');
+    var status  = (document.getElementById('filterStatus') ? document.getElementById('filterStatus').value  : '');
+    var type    = (document.getElementById('filterType')   ? document.getElementById('filterType').value    : '');
+
+    var cards   = document.querySelectorAll('#devicesGrid .device-card');
+    var visible = 0;
+
+    cards.forEach(function(card) {
+        var name   = (card.getAttribute('data-name') || '').toLowerCase();
+        var ip     = (card.getAttribute('data-ip')   || '').toLowerCase();
+        var cStat  =  card.getAttribute('data-status') || '';
+        var cType  =  card.getAttribute('data-type')   || '';
+
+        var matchSearch = !search || name.indexOf(search) !== -1 || ip.indexOf(search) !== -1;
+        var matchStatus = !status || cStat === status;
+        var matchType   = !type   || cType === type;
+
+        if (matchSearch && matchStatus && matchType) {
+            card.style.display = '';
+            visible++;
+        } else {
+            card.style.display = 'none';
+        }
+    });
+
+    var noRes   = document.getElementById('noResults');
+    var counter = document.getElementById('filterCount');
+    var total   = cards.length;
+
+    if (noRes)   { noRes.style.display = (visible === 0 && total > 0) ? 'block' : 'none'; }
+    if (counter) { counter.textContent  = (search || status || type) ? visible + ' / ' + total : ''; }
+}
+
+// ── Tasto "i" — informazioni dispositivo ──────────────────────────────────
+function openInfoModal(id, name) {
+    var overlay = document.getElementById('infoModalOverlay');
+    var title   = document.getElementById('infoModalTitle');
+    var body    = document.getElementById('infoModalBody');
+
+    title.textContent = name;
+    body.innerHTML =
+        '<div class="info-loading">' +
+        '<i class="fas fa-circle-notch fa-spin"></i>' +
+        '<span>Scansione porte in corso&hellip; (può richiedere fino a 15 s)</span>' +
+        '</div>';
+
+    overlay.classList.add('active');
+
+    fetch('api/device_info.php?id=' + encodeURIComponent(id))
+        .then(function(r) { return r.json(); })
+        .then(function(data) {
+            if (data.error) {
+                body.innerHTML = '<p class="info-error"><i class="fas fa-exclamation-triangle"></i> ' + data.message + '</p>';
+                return;
+            }
+
+            var html = '<div class="info-grid">';
+
+            // Dati base
+            html += '<div class="info-row"><span>IP</span><strong>' + data.ip + '</strong></div>';
+            if (data.hostname) {
+                html += '<div class="info-row"><span>Hostname</span><strong>' + data.hostname + '</strong></div>';
+            }
+            if (data.mac) {
+                html += '<div class="info-row"><span>MAC Address</span><strong>' + data.mac + '</strong></div>';
+            }
+            if (data.vendor) {
+                html += '<div class="info-row"><span>Produttore NIC</span><strong>' + data.vendor + '</strong></div>';
+            }
+            if (data.ping_ms !== null && data.ping_ms !== undefined) {
+                html += '<div class="info-row"><span>Latenza</span><strong>' + data.ping_ms + ' ms</strong></div>';
+            }
+
+            html += '</div>';
+
+            // Porte aperte
+            html += '<h3 class="info-ports-title"><i class="fas fa-door-open"></i> Porte aperte</h3>';
+            if (data.ports && data.ports.length > 0) {
+                html += '<table class="info-ports-table">';
+                html += '<thead><tr><th>Porta</th><th>Proto</th><th>Servizio</th><th>Versione</th></tr></thead>';
+                html += '<tbody>';
+                data.ports.forEach(function(p) {
+                    html += '<tr>' +
+                        '<td><span class="port-badge">' + p.port + '</span></td>' +
+                        '<td>' + p.proto + '</td>' +
+                        '<td>' + p.service + '</td>' +
+                        '<td class="port-version">' + (p.version || '—') + '</td>' +
+                        '</tr>';
+                });
+                html += '</tbody></table>';
+            } else {
+                html += '<p class="info-no-ports"><i class="fas fa-lock"></i> Nessuna porta aperta rilevata (o dispositivo offline).</p>';
+            }
+
+            body.innerHTML = html;
+        })
+        .catch(function(err) {
+            body.innerHTML = '<p class="info-error"><i class="fas fa-exclamation-triangle"></i> Errore: ' + err.message + '</p>';
+        });
+}
+
+function closeInfoModal(event) {
+    if (!event || event.target === document.getElementById('infoModalOverlay')) {
+        document.getElementById('infoModalOverlay').classList.remove('active');
+    }
+}
+
+// ── Esportazione CSV ───────────────────────────────────────────────────────
+function exportCsv() {
+    document.getElementById('utilityDropdown').classList.remove('active');
+
+    var devices = <?php echo json_encode(array_values($devices)); ?>;
+
+    if (!devices || devices.length === 0) {
+        showToast('Nessun dispositivo da esportare.', 'warning', 3000);
+        return;
+    }
+
+    var headers = ['ID', 'Nome', 'IP', 'Tipo', 'Stato', 'Ultimo check', 'Ping (ms)', 'Note'];
+    var rows = devices.map(function(d) {
+        return [
+            d.id,
+            '"' + (d.name  || '').replace(/"/g, '""') + '"',
+            d.ip,
+            d.type,
+            d.status,
+            d.last_check || '',
+            (d.ping_ms !== null && d.ping_ms !== undefined) ? d.ping_ms : '',
+            '"' + (d.notes || '').replace(/"/g, '""') + '"'
+        ].join(',');
+    });
+
+    var csv  = '\uFEFF' + headers.join(',') + '\r\n' + rows.join('\r\n');
+    var blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    var url  = URL.createObjectURL(blob);
+    var a    = document.createElement('a');
+    a.href     = url;
+    a.download = 'netvision-dispositivi.csv';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+
+    showToast('Esportazione CSV completata.', 'success', 3000);
 }
 
 // Aggiorna automaticamente lo stato dei dispositivi ogni 60 secondi

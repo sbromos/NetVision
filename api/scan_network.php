@@ -97,6 +97,19 @@ function guessDeviceType(string $manufacturer): string
 $nmap   = findNmapExecutable();
 $subnet = detectLocalSubnet();
 
+// Valida che la subnet abbia formato CIDR IPv4 valido prima di passarla a nmap
+$subnetParts = explode('/', $subnet);
+$cidrOk = (
+    count($subnetParts) === 2
+    && filter_var($subnetParts[0], FILTER_VALIDATE_IP, FILTER_FLAG_IPV4) !== false
+    && ctype_digit($subnetParts[1])
+    && (int)$subnetParts[1] >= 0
+    && (int)$subnetParts[1] <= 32
+);
+if (!$cidrOk) {
+    $subnet = '192.168.1.0/24';
+}
+
 if ($nmap !== 'nmap' && !file_exists($nmap)) {
     echo json_encode([
         'error'   => true,

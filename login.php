@@ -42,20 +42,38 @@
             $username = $_POST['username'];
             $password = $_POST['password'];
 
-            // Cerca l'utente nel database con username e password corrispondenti
-            $stmt = $con->prepare("SELECT * FROM users WHERE username = ? AND password = ?");
-            $stmt->bind_param("ss", $username, $password);
+            // Cerca l'utente nel database tramite username
+            // Usiamo i backtick su `password` perché è una parola riservata in MySQL/MariaDB
+            $stmt = $con->prepare("SELECT id, username, `password` FROM users WHERE username = ?");
+            $stmt->bind_param("s", $username);
             $stmt->execute();
             $result = $stmt->get_result();
 
-            // Se trova almeno un risultato le credenziali sono corrette
+            $loginOk = false;
+
             if($result->num_rows > 0){
+                $user = $result->fetch_assoc();
+
+                if (password_verify($password, $user['password'])) {
+                    // Password hashed (account aggiornato)
+                    $loginOk = true;
+                } elseif ($user['password'] === $password) {
+                    // Password in chiaro (account vecchio) — migra automaticamente all'hash
+                    $newHash = password_hash($password, PASSWORD_DEFAULT);
+                    $upd = $con->prepare("UPDATE users SET password = ? WHERE id = ?");
+                    $upd->bind_param("si", $newHash, $user['id']);
+                    $upd->execute();
+                    $loginOk = true;
+                }
+            }
+
+            if($loginOk){
                 // Salva i dati nella sessione e reindirizza alla dashboard
                 $_SESSION['logged_in'] = true;
                 $_SESSION['username'] = $username;
                 header('Location: dashboard.php');
                 exit();
-                
+
             } else {
                 // Credenziali errate: mostra il toast di errore e il form di nuovo
                 ?>

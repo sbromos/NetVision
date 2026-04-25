@@ -41,7 +41,7 @@ function getIpPingFlag(string $address): ?string
 }
 
 // Recupera tutti i dispositivi dal database (id e ip)
-$result = $con->query("SELECT id, ip FROM devices");
+$result = $con->query("SELECT id, ip FROM devices ORDER BY id ASC");
 
 // Se la query fallisce restituisce un array vuoto e termina
 if (!$result) {
@@ -69,8 +69,8 @@ foreach ($devices as $device) {
     // $pingOut raccoglie l'output testuale del comando.
     // $returnCode contiene l'esito: 0 = ping riuscito (online), diverso da 0 = fallito (offline).
     // escapeshellarg() protegge l'IP da comandi malevoli inseriti nell'indirizzo.
+    $pingOut = [];
     if ($pingFlag !== null) {
-        $pingOut = [];
         exec("ping {$pingFlag} -n 1 -w 500 " . escapeshellarg($device['ip']), $pingOut, $returnCode);
     }
 
@@ -81,12 +81,26 @@ foreach ($devices as $device) {
         $status = 'offline';
     }
 
+    // Estrae la latenza in ms dall'output del ping (es. "time=3ms" o "time<1ms")
+    $pingMs = null;
+    foreach ($pingOut as $pingLine) {
+        if (preg_match('/time[=<](\d+)ms/i', $pingLine, $tm)) {
+            $pingMs = (int) $tm[1];
+            break;
+        }
+    }
+
     // Salva la data e ora attuale del controllo
     $now = date('Y-m-d H:i:s');
 
-    // Aggiorna lo stato e l'ora dell'ultimo controllo nel database
-    $stmt = $con->prepare("UPDATE devices SET status = ?, last_check = ? WHERE id = ?");
-    $stmt->bind_param("ssi", $status, $now, $device['id']);
+    // Aggiorna stato, orario e latenza nel database
+    if ($pingMs !== null) {
+        $stmt = $con->prepare("UPDATE devices SET status = ?, last_check = ?, ping_ms = ? WHERE id = ?");
+        $stmt->bind_param("ssii", $status, $now, $pingMs, $device['id']);
+    } else {
+        $stmt = $con->prepare("UPDATE devices SET status = ?, last_check = ?, ping_ms = NULL WHERE id = ?");
+        $stmt->bind_param("ssi", $status, $now, $device['id']);
+    }
     $stmt->execute();
 
     // Aggiunge il risultato del dispositivo all'array di output
@@ -94,6 +108,7 @@ foreach ($devices as $device) {
         'id'         => $device['id'],
         'status'     => $status,
         'last_check' => date('d/m/Y H:i', strtotime($now)),
+        'ping_ms'    => $pingMs,
     ];
 }
 

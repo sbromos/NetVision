@@ -21,5 +21,7 @@ CREATE TABLE IF NOT EXISTS devices (
     ip         VARCHAR(45)  NOT NULL,
     type       VARCHAR(50)  NOT NULL DEFAULT 'pc',
     status     ENUM('online','offline','unknown') NOT NULL DEFAULT 'unknown',
-    last_check DATETIME DEFAULT NULL
+    last_check DATETIME DEFAULT NULL,
+    ping_ms    INT DEFAULT NULL,
+    notes      TEXT DEFAULT NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;

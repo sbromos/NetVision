@@ -1,111 +1,148 @@
-* {
-    box-sizing: border-box;
-    margin: 0;
-    padding: 0;
-}
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
 body {
-    font-family: Arial, sans-serif;
-    background: #e8f5e9;
+    font-family: 'Inter', system-ui, sans-serif;
+    font-size: 14px;
+    background: #f9fafb;
     display: flex;
     justify-content: center;
     align-items: center;
     min-height: 100vh;
+    color: #374151;
 }
 
 .login-container {
     background: #ffffff;
-    padding: 40px 35px;
+    padding: 40px 36px;
     border-radius: 12px;
-    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
+    box-shadow: 0 1px 4px rgba(0,0,0,0.06), 0 4px 16px rgba(0,0,0,0.06);
+    border: 1px solid #e5e7eb;
     width: 100%;
     max-width: 380px;
 }
 
 .login-container h2 {
-    color: #2e7d32;
+    color: #16a34a;
     text-align: center;
-    margin-bottom: 30px;
-    font-size: 1.8rem;
-    letter-spacing: 1px;
+    font-size: 20px;
+    font-weight: 700;
+    letter-spacing: -0.02em;
+    margin-bottom: 6px;
 }
 
-.form-group {
-    margin-bottom: 20px;
+.login-container h2 + * {
+    margin-top: 0;
 }
+
+/* Sottotitolo dopo il titolo */
+.register-subtitle {
+    font-size: 13px;
+    color: #6b7280;
+    text-align: center;
+    margin-bottom: 24px;
+}
+
+.success-text { color: #15803d; font-weight: 600; }
+
+/* Separatore decorativo sotto il titolo */
+.login-container h2::after {
+    content: '';
+    display: block;
+    width: 32px;
+    height: 2px;
+    background: #16a34a;
+    border-radius: 2px;
+    margin: 10px auto 26px;
+}
+
+.form-group { margin-bottom: 16px; }
 
 .form-group label {
     display: block;
-    color: #4a4a4a;
-    margin-bottom: 8px;
-    font-size: 0.9rem;
+    font-size: 12px;
+    font-weight: 600;
+    color: #374151;
+    margin-bottom: 5px;
 }
 
 .form-group input {
     width: 100%;
-    padding: 12px 15px;
-    background: #f1f8f1;
-    border: 1px solid #a5d6a7;
-    border-radius: 8px;
-    color: #222;
-    font-size: 1rem;
-    transition: border-color 0.3s;
+    padding: 10px 12px;
+    background: #f9fafb;
+    border: 1px solid #e5e7eb;
+    border-radius: 6px;
+    color: #111827;
+    font-size: 14px;
+    font-family: inherit;
     outline: none;
+    transition: border-color 0.15s, background 0.15s;
 }
 
+.form-group input::placeholder { color: #9ca3af; }
+
 .form-group input:focus {
-    border-color: #2e7d32;
+    border-color: #16a34a;
+    background: #ffffff;
 }
 
 .btn-login {
+    display: block;
     width: 100%;
-    padding: 13px;
-    background: #2e7d32;
-    color: #fff;
-    border: none;
-    border-radius: 8px;
-    font-size: 1rem;
-    font-weight: bold;
+    padding: 11px;
+    background: #16a34a;
+    color: #ffffff;
+    border: 1px solid #16a34a;
+    border-radius: 6px;
+    font-size: 13px;
+    font-family: inherit;
+    font-weight: 600;
+    letter-spacing: 0.02em;
     cursor: pointer;
-    letter-spacing: 1px;
-    transition: background 0.3s;
-    margin-top: 10px;
+    text-align: center;
+    text-decoration: none;
+    transition: background 0.15s, border-color 0.15s;
+    margin-top: 8px;
 }
 
 .btn-login:hover {
-    background: #1b5e20;
+    background: #15803d;
+    border-color: #15803d;
 }
 
 .register-hint {
-    font-size: 0.75rem;
-    color: #4a4a4a;
+    font-size: 12px;
+    color: #6b7280;
     text-align: center;
+    font-weight: 500;
     margin-bottom: 0;
 }
 
 .register-hint a {
-    color: #2e7d32;
-    font-weight: bold;
+    color: #16a34a;
+    font-weight: 600;
     text-decoration: none;
 }
 
-.register-hint a:hover {
-    text-decoration: underline;
-}
+.register-hint a:hover { text-decoration: underline; }
 
+/* Toast */
 .toast {
     position: fixed;
-    top: 24px;
+    top: 20px;
     left: 50%;
-    transform: translateX(-50%) translateY(-120px);
-    background: #c62828;
+    transform: translateX(-50%) translateY(-80px);
+    background: #dc2626;
     color: #fff;
-    padding: 14px 28px;
+    padding: 11px 24px;
     border-radius: 8px;
-    font-size: 0.95rem;
-    box-shadow: 0 4px 16px rgba(0,0,0,0.2);
+    font-size: 13px;
+    font-weight: 500;
+    font-family: inherit;
+    box-shadow: 0 4px 16px rgba(0,0,0,0.14);
     opacity: 0;
-    transition: transform 0.5s ease, opacity 0.5s ease;
+    transition: transform 0.3s ease, opacity 0.3s ease;
     z-index: 9999;
 }
 
@@ -114,6 +151,4 @@ body {
     opacity: 1;
 }
 
-.toast.toast-success {
-    background: #2e7d32;
-}
+.toast.toast-success { background: #15803d; }

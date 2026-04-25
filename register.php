@@ -71,9 +71,10 @@
                     // Username già in uso
                     $errore = 'Nome utente già in uso. Scegline un altro.';
                 } else {
-                    // Inserisce il nuovo utente nel database
+                    // Inserisce il nuovo utente nel database con password hashed
+                    $hashedPassword = password_hash($password, PASSWORD_DEFAULT);
                     $stmtInsert = $con->prepare("INSERT INTO users (username, password) VALUES (?, ?)");
-                    $stmtInsert->bind_param("ss", $username, $password);
+                    $stmtInsert->bind_param("ss", $username, $hashedPassword);
 
                     if($stmtInsert->execute()){
                         // Registrazione riuscita: mostra messaggio di successo e pulsante per andare al login
@@ -83,7 +84,7 @@
                             <h2>NetVision</h2>
                             <p class="register-subtitle success-text">Benvenuto, <strong><?php echo $username; ?></strong>!</p>
                             <p class="register-hint" style="text-align:center; margin-top: 20px;">
-                                <a href="login.php" class="btn-login" style="display:block; text-decoration:none; text-align:center;">VAI AL LOGIN</a>
+                                <a href="login.php" class="btn-login" style="display:block; text-decoration:none; text-align:center; color:#fff;">VAI AL LOGIN</a>
                             </p>
                         </div>
                         <script>
